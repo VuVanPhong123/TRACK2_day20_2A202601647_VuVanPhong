@@ -22,9 +22,10 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 
-$VenvPy = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
-$Port   = if ($env:LAB_SERVER_PORT) { $env:LAB_SERVER_PORT } else { '8080' }
-$SysPy  = 'python'
+$VenvPy    = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
+$Port      = if ($env:LAB_SERVER_PORT) { $env:LAB_SERVER_PORT } else { '8080' }
+$EmbedPort = if ($env:LAB_EMBED_PORT) { $env:LAB_EMBED_PORT } else { '8081' }
+$SysPy     = 'python'
 
 function Need-Venv {
     if (-not (Test-Path $VenvPy)) {
@@ -42,6 +43,35 @@ function Locust {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
+function Get-BuildJobs {
+    if ($env:LLAMA_BUILD_JOBS) {
+        if ($env:LLAMA_BUILD_JOBS -notmatch '^[1-9][0-9]*$') {
+            Write-Host "ERROR: LLAMA_BUILD_JOBS must be a positive integer." -ForegroundColor Red
+            exit 1
+        }
+        return [int]$env:LLAMA_BUILD_JOBS
+    }
+
+    $cores = [Environment]::ProcessorCount
+    $ramGb = 8
+    try {
+        $mem = (Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop).TotalPhysicalMemory
+        if ($mem) { $ramGb = [Math]::Floor($mem / 1GB) }
+    }
+    catch {
+        try {
+            $mem = (Get-WmiObject -Class Win32_ComputerSystem -ErrorAction Stop).TotalPhysicalMemory
+            if ($mem) { $ramGb = [Math]::Floor($mem / 1GB) }
+        }
+        catch {
+            Write-Host "WARNING: could not detect RAM; using a conservative 8 GB build budget." -ForegroundColor Yellow
+        }
+    }
+
+    $byRam = [Math]::Max(1, [Math]::Floor($ramGb / 4))
+    return [int][Math]::Min($cores, $byRam)
+}
+
 switch ($Target) {
     'help' {
         Write-Host ""
@@ -50,7 +80,7 @@ switch ($Target) {
         Write-Host ""
         Write-Host "Setup (00)"
         Write-Host "  probe          Probe hardware -> hardware.json"
-        Write-Host "  setup          Install deps + llama.cpp runtime + Gemma 4 E2B"
+        Write-Host "  setup          Install deps + llama.cpp runtime + selected model"
         Write-Host "  runtime        Re-fetch just the llama.cpp binaries"
         Write-Host ""
         Write-Host "Measure (01)"
@@ -58,8 +88,8 @@ switch ($Target) {
         Write-Host "  tune           Thread sweep -> your before/after speedup"
         Write-Host ""
         Write-Host "Serve (02)"
-        Write-Host "  serve          Start llama-server on :8080 (leave running)"
-        Write-Host "  serve-embed    Embedding server on :8081 (bonus C9)"
+        Write-Host "  serve          Start llama-server on :$Port (leave running)"
+        Write-Host "  serve-embed    Embedding server on :$EmbedPort (bonus C9)"
         Write-Host "  smoke          Prove the API + non-zero /metrics"
         Write-Host "  load-10        Load test, 10 users, 60s"
         Write-Host "  load-50        Load test, 50 users, 60s"
@@ -120,6 +150,7 @@ switch ($Target) {
     'semantic-cache-offline' { Py bonus\serving-regimes\semantic-cache-demo.py --offline --sweep }
 
     'build-llama' {
+        Need-Venv
         foreach ($t in 'cmake', 'git') {
             if (-not (Get-Command $t -ErrorAction SilentlyContinue)) {
                 Write-Host "ERROR: $t not found. Install Visual Studio Build Tools + cmake + git." -ForegroundColor Red
@@ -127,12 +158,18 @@ switch ($Target) {
             }
         }
         $build = & $VenvPy -c "import sys;sys.path.insert(0,'lib');import labkit;print(labkit.LLAMA_CPP_BUILD)"
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         if (-not (Test-Path 'bonus\llama.cpp')) {
             git clone --depth 1 --branch $build https://github.com/ggml-org/llama.cpp bonus\llama.cpp
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         }
         $flags = if ($env:LLAMA_CMAKE_FLAGS) { $env:LLAMA_CMAKE_FLAGS -split ' ' } else { @() }
+        $jobs = Get-BuildJobs
+        Write-Host "Building llama.cpp with $jobs parallel job(s). Override with LLAMA_BUILD_JOBS." -ForegroundColor Cyan
         cmake -B bonus\llama.cpp\build -S bonus\llama.cpp @flags -DGGML_NATIVE=ON -DCMAKE_BUILD_TYPE=Release
-        cmake --build bonus\llama.cpp\build -j --config Release
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        cmake --build bonus\llama.cpp\build -j $jobs --config Release
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         Write-Host ""
         Write-Host "Built. Now compare it against the prebuilt binary:  .\lab.ps1 compare-builds"
     }
@@ -141,7 +178,8 @@ switch ($Target) {
         Remove-Item -ErrorAction SilentlyContinue benchmarks\01-*.md, benchmarks\01-*.json,
             benchmarks\02-*.md, benchmarks\02-*.json, benchmarks\02-*.csv,
             benchmarks\03-*.md, benchmarks\03-*.json,
-            benchmarks\locust-*.csv, benchmarks\bonus-*.md, benchmarks\bonus-*.json
+            benchmarks\locust-*.csv, benchmarks\bonus-*.md, benchmarks\bonus-*.json,
+            benchmarks\.llama-server.log
         Write-Host "Cleaned generated reports. Kept hardware.json, models\, runtime\, submission\."
     }
 
@@ -149,7 +187,8 @@ switch ($Target) {
         Remove-Item -ErrorAction SilentlyContinue benchmarks\01-*.md, benchmarks\01-*.json,
             benchmarks\02-*.md, benchmarks\02-*.json, benchmarks\02-*.csv,
             benchmarks\03-*.md, benchmarks\03-*.json,
-            benchmarks\locust-*.csv, benchmarks\bonus-*.md, benchmarks\bonus-*.json
+            benchmarks\locust-*.csv, benchmarks\bonus-*.md, benchmarks\bonus-*.json,
+            benchmarks\.llama-server.log
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue .venv, runtime, models,
             bonus\llama.cpp, hardware.json
         Write-Host "Removed venv, runtime, models and hardware.json. Re-run: .\lab.ps1 setup"
