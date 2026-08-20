@@ -6,8 +6,8 @@ Host `Linux-x86_64` · llama.cpp `b10488` ·
 
 | Users | Reqs | RPS | P50 (ms) | P95 (ms) | P99 (ms) | Eff. concurrency | Failures |
 |:--|--:|--:|--:|--:|--:|--:|--:|
-| 10 | 38 | 0.63 | 12000 | 24000 | 28000 | 8.1 | 0.0% |
-| 50 | 39 | 0.61 | 29000 | 54000 | 57000 | 17.2 | 0.0% |
+| 10 | 59 | 0.92 | 8000 | 14000 | 15000 | 7.6 | 0.0% |
+| 50 | 55 | 0.85 | 23000 | 55000 | 55000 | 22.8 | 0.0% |
 
 *Effective concurrency = RPS x average latency (Little's Law) -- how many requests were
 really in flight, regardless of how many users locust simulated. It counts queued requests
@@ -19,24 +19,23 @@ utilisation. For true slot utilisation use the server's own gauges (`make metric
 | Going from 10 to 50 users | |
 |:--|--:|
 | Offered load | 5x |
-| Throughput actually delivered | **0.98x** (20% of linear) |
-| P95 latency | **2.25x** |
-| Effective concurrency at 50 users | 17.2 vs `--parallel 4` slots (occupancy/slot ratio 4.30) |
+| Throughput actually delivered | **0.93x** (19% of linear) |
+| P95 latency | **3.93x** |
+| Effective concurrency at 50 users | 22.8 vs `--parallel 4` slots (occupancy/slot ratio 5.69) |
 
-**Saturated.** Throughput delivered only 0.98x for 5x the offered load, and effective concurrency (17.2) is at or above all 4 decode slots. Saturation sets in somewhere at or below 50 users; the load you added beyond that point became queue time rather than throughput.
+**Saturated.** Throughput delivered only 0.93x for 5x the offered load, and effective concurrency (22.8) is at or above all 4 decode slots. Saturation sets in somewhere at or below 50 users; the added load mostly increased queueing rather than producing linear throughput.
 
-Throughput moved 0.98x while P95 moved 2.25x. That gap is the goodput argument: past saturation you buy throughput by spending latency, and if your SLO is a P95 target then the requests you added are no longer being served within it. (This lab does not fix an SLO number for you -- pick one in your write-up and state how much goodput you keep at it.)
+Throughput moved 0.93x while P95 moved 3.93x. That gap shows the added load was paid for mainly in latency; a chosen P95 SLO would be needed to calculate goodput, and these aggregate CSVs do not provide that percentage directly.
 
-## Your reading
+## Saturation reading
 
-The tested range is already saturated at or below 50 users: offered load rose 5x, but
-RPS moved from 0.63 to 0.61 (0.98x), while P95 inflated 2.25x from 24,000 to 54,000 ms.
-At 50 users Little's-Law effective concurrency was 17.2 versus four slots, and the
-overlapping metrics run measured 3.91/4 busy slots plus deferred requests. These are
-queueing signals, not proof of an exact capacity point; with only 10- and 50-user
-points, I can only place the knee at or below the tested 50-user regime. For a stated
-P95 SLO of 30 s, the 10-user aggregate remains within the target but the 50-user run
-does not; the CSV is too aggregate/thin to claim an exact goodput percentage. I would
-first retest with the measured `-t 3` setting (33.7 vs 32.2 tok/s in the tune sweep),
-because it improves decode without increasing KV/slot memory; raising `--parallel`
-would likely admit more queueing on this CPU rather than improve SLO goodput.
+The tested range places saturation at or below 50 users, not at one exact point:
+offered load rose 5x, but RPS fell from 0.92 to 0.85 (0.93x), while P95 rose
+from 14,000 ms to 55,000 ms (3.93x). At 50 users, effective concurrency was
+22.8 against 4 `--parallel` slots (5.69x the slot count), and the overlapping
+metrics run measured 3.94356 busy slots plus 46 deferred requests. These are
+strong queueing and slot-pressure signals; they show that the added load mostly
+increased waiting, but do not identify an exact knee or split queue time from
+compute time. I would retest with `-t 3` first: the current tuning evidence is
+33.74 versus 32.17 tok/s at `-t 6` (1.0488x), while increasing `--parallel` could
+admit more queued work without increasing CPU decode capacity.

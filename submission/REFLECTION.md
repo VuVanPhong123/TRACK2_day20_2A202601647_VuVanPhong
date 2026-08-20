@@ -6,8 +6,9 @@
 >
 > `make verify` sẽ fail nếu còn placeholder chưa điền. Đó là cố ý.
 
-**Họ Tên:** Vũ Văn Phong (inferred from the repository identity)
-**Cohort:** Không xác định được từ repository hoặc user input; cần xác nhận trước khi submit.
+**Họ Tên:** Vũ Văn Phong
+**Student ID / MSSV:** 2A202601647
+**Cohort:** 3
 **Ngày submit:** 2026-08-20
 
 ---
@@ -43,14 +44,14 @@ runtime llama.cpp prebuilt và tải đủ hai GGUF; không cần workaround hay
 
 | Quantization | Size (GB) | Load (ms) | TTFT P50/P95 (ms) | TPOT P50/P95 (ms) | E2E P50/P95/P99 (ms) | Decode (tok/s) |
 |---|--:|--:|--:|--:|--:|--:|
-| Q4_K_M | 0.50 | 2083 | 304 / 355 | 31.4 / 32.7 | 2247 / 2414 / 2414 | 31.8 |
-| UD-Q2_K_XL | 0.39 | 2067 | 428 / 471 | 33.1 / 40.4 | 2513 / 2993 / 2993 | 30.2 |
+| Q4_K_M | 0.50 | 2110 | 165 / 202 | 18.2 / 20.0 | 1290 / 1418 / 1418 | 54.9 |
+| UD-Q2_K_XL | 0.39 | 2051 | 376 / 403 | 28.5 / 31.1 | 2158 / 2330 / 2330 | 35.1 |
 
 **Quan sát** (≤ 60 chữ): 2-bit nhanh hơn bao nhiêu, và **có đáng không**? Bạn đã thử
 hỏi cùng một câu trên cả hai (`make serve` vs `.venv/bin/python labs/02-serve/serve.py --compare`)
 chưa? Chất lượng khác nhau thế nào?
 
-Q4 nhanh hơn 5.0% ở decode (31.8 so với 30.2 tok/s); Q2 nhỏ hơn 0.11 GB/22% nhưng TTFT P50 cao hơn 1.41x và E2E P50 cao hơn 1.12x. Trên cùng một prompt, Q4 có cấu trúc tốt hơn còn Q2 lan man hơn; tôi chọn Q4 trên máy này.
+Q4 nhanh hơn trên run này: 54.9 so với 35.1 tok/s, tức 1.56x (56.4%) cao hơn ở decode. Q2 nhỏ hơn 0.11 GB, tương đương 22% kích thước Q4, nhưng TTFT P50 cao hơn 2.28x và E2E P50 cao hơn 1.67x. Repository hiện không có bằng chứng chất lượng trả lời theo cặp, nên tôi không khẳng định khác biệt chất lượng. Với ưu tiên latency, tôi chọn Q4; Q2 chỉ đáng chọn nếu tiết kiệm dung lượng quan trọng hơn.
 
 ---
 
@@ -60,22 +61,23 @@ Q4 nhanh hơn 5.0% ở decode (31.8 so với 30.2 tok/s); Q2 nhỏ hơn 0.11 GB/
 
 | Users | RPS | P50 (ms) | P95 (ms) | P99 (ms) | Eff. concurrency | Failures |
 |--:|--:|--:|--:|--:|--:|--:|
-| 10 | 0.63 | 12000 | 24000 | 28000 | 8.1 | 0.0% |
-| 50 | 0.61 | 29000 | 54000 | 57000 | 17.2 | 0.0% |
+| 10 | 0.92 | 8000 | 14000 | 15000 | 7.6 | 0.0% |
+| 50 | 0.85 | 23000 | 55000 | 55000 | 22.8 | 0.0% |
 
-- **Offered load tăng 5×, throughput thực tăng:** 0.98×
-- **P95 tăng:** 2.25×
-- **Effective concurrency ở 50 users:** 17.2 so với `--parallel` = 4 slots
+- **Offered load tăng 5×, throughput thực:** 0.93× (0.92 → 0.85 RPS)
+- **P95 tăng:** 3.93× (14,000 → 55,000 ms)
+- **Effective concurrency ở 50 users:** 22.8 so với `--parallel` = 4 slots (5.69× slot count)
 
 **Peak `llamacpp:n_busy_slots_per_decode`** (từ `make metrics` khi `make load-50` đang
-chạy): 3.91 / 4 slots
+chạy): 3.94356 / 4 slots (99%); `requests_processing` đạt 4, `requests_deferred`
+đạt 46, và `tokens_predicted_total` kết thúc ở 6,832.
 
 **Saturation reading** (≤ 80 chữ): server của bạn bão hoà ở đâu, và **bằng chứng nào**
 thuyết phục bạn? Nếu P95 tăng nhanh hơn RPS thì phần latency thêm đó là queue time hay
 compute time — bạn biết bằng cách nào? Nếu bạn phải nâng goodput@SLO, bạn sẽ đổi knob
 nào **trước**, và vì sao knob đó?
 
-Trong range đã đo, saturation nằm ở hoặc dưới 50 users: RPS gần như phẳng (0.63 → 0.61) nhưng P95 tăng 2.25x. Metrics đồng thời ghi 3.91/4 busy slots và 46 request deferred. Với SLO P95 30 s, 10 users nằm dưới ngưỡng còn 50 users vượt ngưỡng; CSV aggregate không đủ để tính goodput chính xác. Tôi sẽ retest `-t 3` trước vì sweep đo được 33.7 thay 32.2 tok/s, không tăng áp lực KV như tăng `--parallel`.
+Trong range đã đo, saturation nằm ở hoặc dưới 50 users, chưa thể chỉ ra một knee chính xác: offered load tăng 5x nhưng RPS giảm từ 0.92 xuống 0.85 (0.93x), còn P95 tăng 3.93x từ 14,000 lên 55,000 ms. Effective concurrency 50 users là 22.8 so với 4 slots; metrics chồng thời gian ghi 3.94356/4 busy slots và 46 request deferred. Điều này cho thấy queueing góp phần lớn vào latency thêm, nhưng dữ liệu không tách chính xác queue time khỏi compute time. Tôi sẽ retest `-t 3` trước: tuning hiện tại đo 33.74 so với 32.17 tok/s ở `-t 6` (1.0488x), còn tăng `--parallel` có thể chỉ nhận thêm queue trên CPU này.
 
 ---
 
@@ -94,14 +96,14 @@ Trong range đã đo, saturation nằm ở hoặc dưới 50 users: RPS gần nh
 **Latency split** (mean của 3 query, từ output của `pipeline.py`):
 
 - embed: 0.0 ms
-- retrieve: 0.1 ms
-- llm: 5224.4 ms
+- retrieve: 0.0 ms
+- llm: 2814.3 ms
 - **stage chiếm nhiều nhất:** llm (100% của total khi làm tròn)
 
 **Reflection** (≤ 60 chữ): bottleneck ở đâu? Có khớp với kỳ vọng của bạn không? Nếu
 phải giảm latency của pipeline này 2×, bạn sẽ tấn công vào đâu?
 
-N16–N19 là local stubs; N20 llama-server là real. LLM đúng như dự đoán là bottleneck (5224.4/5224.5 ms), còn retrieval chỉ 0.1 ms. Muốn giảm 2x, tôi sẽ giảm output/prompt cost hoặc tối ưu decode trước.
+N16 Cloud/IaC, N17 data pipeline, N18 lakehouse, và N19 vector/features đều là local stubs: pipeline dùng `TOY_DOCS` trong memory và keyword overlap, không có cloud, batch orchestrator, lakehouse hay vector index thật. N20 serving là **real** qua local `llama-server`. Ba query đều chạy và lấy được contexts. Mean hiện tại là embed 0.0 ms, retrieve 0.0 ms, llm 2814.3 ms, total 2814.4 ms; LLM là bottleneck (99.996%, làm tròn 100%). Muốn giảm 2x, tôi sẽ tấn công LLM decode hoặc giảm prompt/output work trước vì retrieval gần như không đáng kể.
 
 ---
 
@@ -114,9 +116,9 @@ N16–N19 là local stubs; N20 llama-server là real. LLM đúng như dự đoá
 **Change:** hạ số thread decode từ `-t 6` xuống `-t 3`
 
 ```
-before:  32.2 tok/s (`-t 6`)
-after:   33.7 tok/s (`-t 3`)
-speedup: 1.05×
+before:  32.17 tok/s (`-t 6`)
+after:   33.74 tok/s (`-t 3`)
+speedup: 1.0488× (+4.88%)
 ```
 
 **Tại sao nó work** (1–2 đoạn — đây là phần grader đọc kỹ nhất):
@@ -126,9 +128,9 @@ memory bandwidth? vector width? cache residency? scheduling? queueing? Nếu k�
 **khác** với kỳ vọng từ deck — nói rõ, và giải thích vì sao. Grader thưởng điểm cho
 lập luận đúng về một kết quả bất ngờ, hơn là một con số đẹp không được giải thích._
 
-Sweep thật trên CPU này cho thấy knee ở 3 thread, thấp hơn 6 physical cores: thêm thread không còn tạo thêm decode work mà làm các worker tranh chấp CPU time, cache và memory bandwidth. `-t 12` giảm còn 21.3 tok/s và oversubscription `-t 24` giảm mạnh còn 2.4 tok/s, nên kết quả không phải một speedup được chọn vì số đẹp.
+Sweep thật trên CPU này cho thấy knee ở 3 thread, thấp hơn 6 physical cores: thêm thread không còn tạo thêm decode work mà làm các worker tranh chấp CPU time, cache và memory bandwidth. `-t 12` giảm còn 21.33 tok/s và oversubscription `-t 24` giảm mạnh còn 2.41 tok/s, nên kết quả không phải một speedup được chọn vì số đẹp.
 
-Vì vậy thay đổi nhỏ 6 → 3 chỉ cho 1.05×, nhưng nó là knob có bằng chứng trực tiếp và không làm tăng KV/slot memory. Đây là lý do tôi ưu tiên retest thread count trước khi tăng `--parallel`, vốn có thể chỉ biến thêm tải thành queue trên máy CPU này.
+Vì vậy thay đổi nhỏ 6 → 3 cho 1.0488x (xấp xỉ 1.05x), nhưng nó là knob có bằng chứng trực tiếp và không làm tăng KV/slot memory. Đây là lý do tôi ưu tiên retest thread count trước khi tăng `--parallel`, vốn có thể chỉ biến thêm tải thành queue trên máy CPU này.
 
 ---
 
